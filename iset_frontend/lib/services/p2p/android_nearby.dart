@@ -19,6 +19,7 @@ class AndroidNearby {
   static const strategy = Strategy.P2P_STAR;
   static const _filesChannel = MethodChannel('com.iset.community/files');
   static const receivedFolder = 'ISET Community Hub files';
+  static const chatPrefix = 'MSG:';
 
   AndroidNearby({
     required this.onEndpointFound,
@@ -38,7 +39,7 @@ class AndroidNearby {
   final void Function(String id, String name) onConnectionInitiated;
   final void Function(String id, bool connected) onConnectionResult;
   final void Function(String id) onDisconnected;
-  final void Function(int payloadId, Uint8List bytes) onBytes;
+  final void Function(String endpointId, int payloadId, Uint8List bytes) onBytes;
   final void Function(int payloadId, String uri) onFilePayload;
   final void Function(int payloadId, int transferred, int total, bool success, bool inProgress)
       onTransferUpdate;
@@ -107,7 +108,7 @@ class AndroidNearby {
       endpointId,
       onPayLoadRecieved: (endpoint, payload) {
         if (payload.type == PayloadType.BYTES && payload.bytes != null) {
-          onBytes(payload.id, payload.bytes!);
+          onBytes(endpoint, payload.id, payload.bytes!);
         } else if (payload.type == PayloadType.FILE && payload.uri != null) {
           onFilePayload(payload.id, payload.uri!);
         }
@@ -123,6 +124,14 @@ class AndroidNearby {
   }
 
   Future<bool> reject(String endpointId) => _nearby.rejectConnection(endpointId);
+
+  /// Sends one text message over the existing Nearby connection.
+  Future<void> sendChatText(String endpointId, String text) {
+    return _nearby.sendBytesPayload(
+      endpointId,
+      Uint8List.fromList(utf8.encode('$chatPrefix$text')),
+    );
+  }
 
   Future<PickedTransfer?> pickAndSend(String endpointId) async {
     final result = await FilePicker.platform.pickFiles(withData: false);

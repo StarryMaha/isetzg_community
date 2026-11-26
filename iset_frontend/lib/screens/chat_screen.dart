@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/user.dart';
 import '../state/auth_provider.dart';
 import '../state/chat_provider.dart';
+import '../state/p2p_provider.dart';
 import '../theme.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -48,9 +49,11 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final chat = context.watch<ChatProvider>();
+    final p2p = context.watch<P2PProvider>();
     final myId = context.read<AuthProvider>().user?.id;
     final messages = chat.messages(widget.peer.id);
     final online = chat.onlineUsers.contains(widget.peer.id);
+    final nearbyReady = p2p.isConnectedTo(widget.peer.name);
 
     return Scaffold(
       appBar: AppBar(
@@ -85,7 +88,9 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Text(
                 chat.connection == ChatConnection.connecting
                     ? 'Connecting to chat server…'
-                    : 'Offline — messages cannot be sent right now',
+                    : nearbyReady
+                        ? 'Server offline — messages will use Nearby'
+                        : 'Server offline — connect nearby to send messages',
                 style: const TextStyle(color: AppColors.accent, fontSize: 12),
                 textAlign: TextAlign.center,
               ),
@@ -139,6 +144,16 @@ class _ChatScreenState extends State<ChatScreen> {
                                       fontSize: 11,
                                     ),
                                   ),
+                                  if (message.id < 0)
+                                    Text(
+                                      'Via Nearby',
+                                      style: TextStyle(
+                                        color: mine
+                                            ? Colors.black54
+                                            : AppColors.muted,
+                                        fontSize: 10,
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),

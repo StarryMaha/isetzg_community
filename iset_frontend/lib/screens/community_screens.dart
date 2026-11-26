@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/user.dart';
 import '../state/auth_provider.dart';
 import '../state/chat_provider.dart';
 import '../state/p2p_provider.dart';
@@ -73,7 +74,7 @@ class ChatsScreen extends StatelessWidget {
               child: Text(
                 chat.connection == ChatConnection.connecting
                     ? 'Connecting…'
-                    : 'Not connected to chat server',
+                    : 'Not connected to chat server — nearby chat available from Files',
                 style: const TextStyle(color: AppColors.accent, fontSize: 12),
               ),
             ),
@@ -259,6 +260,7 @@ class _FilesScreenState extends State<FilesScreen> {
   @override
   Widget build(BuildContext context) {
     final p2p = context.watch<P2PProvider>();
+    final chat = context.watch<ChatProvider>();
     final myName = context.read<AuthProvider>().user?.name ?? 'ISET student';
     final received = p2p.transfers
         .where((t) => t.kind == TransferKind.incoming && t.status == TransferStatus.done)
@@ -313,6 +315,27 @@ class _FilesScreenState extends State<FilesScreen> {
                   _peerTile(peer, 'Reject', () => p2p.reject(peer)),
                 for (final peer in p2p.connected)
                   _peerTile(peer, 'Send file', () => p2p.sendFile(peer)),
+                for (final peer in p2p.connected)
+                  _peerTile(peer, 'Chat', () {
+                    final contact = chat.contacts.firstWhere(
+                      (c) => c.name == peer.name,
+                      orElse: () => const AppUser(id: -1, studentId: '', name: ''),
+                    );
+                    if (contact.id == -1) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                              'No cached contact named ${peer.name}. Connect to the server once to load contacts.'),
+                        ),
+                      );
+                      return;
+                    }
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ChatScreen(peer: contact),
+                      ),
+                    );
+                  }),
                 const SizedBox(height: 16),
                 const Text('Transfers',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),

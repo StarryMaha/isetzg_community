@@ -33,6 +33,20 @@ class TransferItem {
   double get progress => total <= 0 ? 0 : transferred / total;
 }
 
+class NearbyChatMessage {
+  final String peerName;
+  final String text;
+  final bool mine;
+  final DateTime at;
+
+  const NearbyChatMessage({
+    required this.peerName,
+    required this.text,
+    required this.mine,
+    required this.at,
+  });
+}
+
 /// Exposes Android Nearby Connections state to the UI. All Android-only calls
 /// live in android_nearby.dart and are only made when [supported] is true.
 class P2PProvider extends ChangeNotifier {
@@ -68,18 +82,22 @@ class P2PProvider extends ChangeNotifier {
           _status = 'Device disconnected';
           notifyListeners();
         },
-        onBytes: (payloadId, bytes) {
-          _controlPayloadIds.add(payloadId);
+        onBytes: (endpointId, payloadId, bytes) {
           try {
             final text = utf8.decode(bytes);
-            final separator = text.indexOf(':');
-            if (separator > 0) {
-              final id = int.tryParse(text.substring(0, separator));
-              if (id != null) {
-                final name = text.substring(separator + 1);
-                _incomingNames[id] = name;
-                for (final transfer in _transfers) {
-                  if (transfer.payloadId == id) transfer.fileName = name;
+            if (text.startsWith(AndroidNearby.chatPrefix)) {
+              _receiveChat(endpointId, text.substring(AndroidNearby.chatPrefix.length));
+            } else {
+              _controlPayloadIds.add(payloadId);
+              final separator = text.indexOf(':');
+              if (separator > 0) {
+                final id = int.tryParse(text.substring(0, separator));
+                if (id != null) {
+                  final name = text.substring(separator + 1);
+                  _incomingNames[id] = name;
+                  for (final transfer in _transfers) {
+                    if (transfer.payloadId == id) transfer.fileName = name;
+                  }
                 }
               }
             }
@@ -143,6 +161,10 @@ class P2PProvider extends ChangeNotifier {
   final Map<int, String> _incomingNames = {};
   final Map<int, String> _incomingUris = {};
   final Set<int> _controlPayloadIds = {};
+  final List<NearbyChatMessage> _chatMessages = [];
+
+  /// Set by ChatProvider so incoming Nearby text lands in the chat thread.
+  void Function(String peerName, String text)? onChatText;
 
   bool get running => _running;
   String get status => _status;
@@ -150,6 +172,10 @@ class P2PProvider extends ChangeNotifier {
   List<Peer> get pending => List.unmodifiable(_pending);
   List<Peer> get connected => List.unmodifiable(_connected);
   List<TransferItem> get transfers => List.unmodifiable(_transfers);
+  List<NearbyChatMessage> get chatMessages => List.unmodifiable(_chatMessages);
+
+  bool isConnectedTo(String peerName) =>
+      _connected.any((p) => p.name == peerName);
 
   Future<void> start(String myName) async {
     final service = _service;
@@ -228,6 +254,51 @@ class P2PProvider extends ChangeNotifier {
       _status = 'File transfer failed: $error';
     }
     notifyListeners();
+  }
+
+  /// Returns false when no connected peer matches [peerName].
+  Future<bool> sendChatText(String peerName, String text) async {
+    final service = _service;
+    if (service == null || text.trim().isEmpty) return false;
+    final peer = _connected.firstWhere(
+      (p) => p.name == peerName,
+      orElse: () => const Peer(id: '', name: ''),
+    );
+    if (peer.id.isEmpty) return false;
+
+    try {
+      await service.sendChatText(peer.id, text.trim());
+      _chatMessages.add(NearbyChatMessage(
+        peerName: peerName,
+        text: text.trim(),
+        mine: true,
+        at: DateTime.now(),
+      ));
+      _status = 'Sent message to $peerName via Nearby';
+      notifyListeners();
+      return true;
+    } catch (error) {
+      _status = 'Nearby message failed: $error';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  void _receiveChat(String endpointId, String text) {
+    final peer = _connected.firstWhere(
+      (p) => p.id == endpointId,
+      orElse: () => Peer(
+            id: endpointId,
+            name: endpointId.length > 6 ? endpointId.substring(0, 6) : endpointId,
+          ),
+    );
+    _chatMessages.add(NearbyChatMessage(
+      peerName: peer.name,
+      text: text,
+      mine: false,
+      at: DateTime.now(),
+    ));
+    onChatText?.call(peer.name, text);
   }
 
   void _addUnique(List<Peer> list, Peer peer) {
