@@ -36,7 +36,7 @@ ThemeData buildTheme() {
     ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: AppColors.surface,
-      indicatorColor: AppColors.primary.withOpacity(0.18),
+      indicatorColor: AppColors.primary.withValues(alpha: 0.18),
     ),
     appBarTheme: const AppBarTheme(
       backgroundColor: AppColors.bg,

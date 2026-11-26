@@ -1,5 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../state/auth_provider.dart';
+import '../state/chat_provider.dart';
+import '../state/p2p_provider.dart';
 import '../theme.dart';
+import 'chat_screen.dart';
 
 /// Shown to guests on screens that need an account.
 class LockedView extends StatelessWidget {
@@ -23,7 +29,7 @@ class LockedView extends StatelessWidget {
             const SizedBox(height: 20),
             FilledButton(
               style: FilledButton.styleFrom(minimumSize: const Size(200, 48)),
-              onPressed: () => Navigator.pushReplacementNamed(context, '/login'),
+              onPressed: () => context.read<AuthProvider>().showLogin(),
               child: const Text('Sign in'),
             ),
           ],
@@ -47,67 +53,85 @@ class _Header extends StatelessWidget {
 class ChatsScreen extends StatelessWidget {
   const ChatsScreen({super.key});
 
-  static const _chats = [
-    ('Sarra B.', 'Did you get the lab notes?', '10:42', 2, false),
-    ('Algorithms group', 'Meeting at 4pm in B12', '09:15', 0, false),
-    ('Yassine M.', 'Sending the file when I connect', 'Yesterday', 0, true),
-    ('Network class', 'Slides are shared', 'Mon', 5, false),
-  ];
-
   @override
   Widget build(BuildContext context) {
+    final chat = context.watch<ChatProvider>();
     return Scaffold(
       floatingActionButton: FloatingActionButton(
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.black,
-        onPressed: () {},
-        child: const Icon(Icons.edit_outlined),
+        onPressed: () => context.read<ChatProvider>().refreshContacts(),
+        child: const Icon(Icons.refresh),
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const _Header('Chats'),
-          Expanded(
-            child: ListView.builder(
-              itemCount: _chats.length,
-              itemBuilder: (_, i) {
-                final c = _chats[i];
-                return ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-                  leading: CircleAvatar(
-                    radius: 24,
-                    backgroundColor: AppColors.surface2,
-                    child: Text(c.$1[0], style: const TextStyle(fontWeight: FontWeight.w700)),
-                  ),
-                  title: Text(c.$1, style: const TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: Row(children: [
-                    if (c.$5) const Padding(
-                      padding: EdgeInsets.only(right: 4),
-                      child: Icon(Icons.schedule, size: 14, color: AppColors.accent),
-                    ),
-                    Expanded(child: Text(c.$2, maxLines: 1, overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: AppColors.muted))),
-                  ]),
-                  trailing: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(c.$3, style: const TextStyle(fontSize: 12, color: AppColors.muted)),
-                      if (c.$4 > 0)
-                        Container(
-                          margin: const EdgeInsets.only(top: 4),
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                          decoration: BoxDecoration(
-                              color: AppColors.primary, borderRadius: BorderRadius.circular(10)),
-                          child: Text('${c.$4}',
-                              style: const TextStyle(color: Colors.black, fontSize: 12, fontWeight: FontWeight.w700)),
-                        ),
-                    ],
-                  ),
-                  onTap: () {},
-                );
-              },
+          if (chat.connection != ChatConnection.online)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Text(
+                chat.connection == ChatConnection.connecting
+                    ? 'Connecting…'
+                    : 'Not connected to chat server',
+                style: const TextStyle(color: AppColors.accent, fontSize: 12),
+              ),
             ),
+          Expanded(
+            child: chat.contacts.isEmpty
+                ? const Center(
+                    child: Text('No other students registered yet.',
+                        style: TextStyle(color: AppColors.muted)),
+                  )
+                : ListView.builder(
+                    itemCount: chat.contacts.length,
+                    itemBuilder: (_, i) {
+                      final contact = chat.contacts[i];
+                      final last = chat.lastMessage(contact.id);
+                      final online = chat.onlineUsers.contains(contact.id);
+                      return ListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 4),
+                        leading: CircleAvatar(
+                          radius: 24,
+                          backgroundColor: AppColors.surface2,
+                          child: Text(
+                            contact.name.isNotEmpty
+                                ? contact.name[0].toUpperCase()
+                                : '?',
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        title: Text(contact.name,
+                            style: const TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: Text(
+                          last?.content ?? 'Tap to start chatting',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: AppColors.muted),
+                        ),
+                        trailing: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            if (last != null)
+                              Text(last.timeLabel,
+                                  style: const TextStyle(
+                                      fontSize: 12, color: AppColors.muted)),
+                            const SizedBox(height: 4),
+                            Icon(Icons.circle,
+                                size: 9,
+                                color: online ? AppColors.primary : AppColors.muted),
+                          ],
+                        ),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => ChatScreen(peer: contact),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
           ),
         ],
       ),
@@ -165,17 +189,81 @@ class GroupsScreen extends StatelessWidget {
 }
 
 // ---------- Files ----------
-class FilesScreen extends StatelessWidget {
+class FilesScreen extends StatefulWidget {
   const FilesScreen({super.key});
 
-  static const _files = [
-    ('network_lab.pdf', '2.4 MB', 'Received via Wi-Fi Direct', Icons.wifi_tethering, true),
-    ('algo_summary.docx', '640 KB', 'Sent via campus Wi-Fi', Icons.wifi, true),
-    ('project_slides.pptx', '8.1 MB', 'Waiting for a connection', Icons.schedule, false),
-  ];
+  @override
+  State<FilesScreen> createState() => _FilesScreenState();
+}
+
+class _FilesScreenState extends State<FilesScreen> {
+  Widget _peerTile(Peer peer, String action, VoidCallback onPressed) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.devices_other, color: AppColors.primary),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(peer.name,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+                overflow: TextOverflow.ellipsis),
+          ),
+          TextButton(onPressed: onPressed, child: Text(action)),
+        ],
+      ),
+    );
+  }
+
+  Widget _transferTile(TransferItem transfer) {
+    final label = transfer.status == TransferStatus.done
+        ? 'Completed'
+        : transfer.status == TransferStatus.failed
+            ? 'Failed'
+            : '${(transfer.progress * 100).round()}%';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(transfer.fileName,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                    overflow: TextOverflow.ellipsis),
+              ),
+              Text(
+                '${transfer.kind == TransferKind.incoming ? 'In' : 'Out'} • $label',
+                style: const TextStyle(color: AppColors.muted, fontSize: 12),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          LinearProgressIndicator(value: transfer.status == TransferStatus.done ? 1 : transfer.progress),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final p2p = context.watch<P2PProvider>();
+    final myName = context.read<AuthProvider>().user?.name ?? 'ISET student';
+    final received = p2p.transfers
+        .where((t) => t.kind == TransferKind.incoming && t.status == TransferStatus.done)
+        .toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -184,34 +272,75 @@ class FilesScreen extends StatelessWidget {
           child: ListView(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             children: [
-              for (final f in _files)
+              if (!p2p.supported)
                 Container(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                      color: AppColors.surface, borderRadius: BorderRadius.circular(16)),
-                  child: Row(children: [
-                    const Icon(Icons.insert_drive_file_outlined, color: AppColors.primary),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(f.$1, style: const TextStyle(fontWeight: FontWeight.w600)),
-                        Text('${f.$2} • ${f.$3}',
-                            style: const TextStyle(color: AppColors.muted, fontSize: 12)),
-                      ]),
-                    ),
-                    Icon(f.$4, size: 18, color: f.$5 ? AppColors.muted : AppColors.accent),
-                  ]),
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Text(
+                    'Direct device-to-device transfer is available on Android only. '
+                    'The Wi-Fi fallback is coming in the next phase.',
+                    style: TextStyle(color: AppColors.muted),
+                  ),
+                )
+              else ...[
+                FilledButton.icon(
+                  onPressed: () => p2p.running ? p2p.stop() : p2p.start(myName),
+                  icon: Icon(p2p.running ? Icons.stop : Icons.wifi_tethering),
+                  label: Text(p2p.running ? 'Stop nearby sharing' : 'Start nearby sharing'),
                 ),
+                if (p2p.status.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(p2p.status,
+                      style: const TextStyle(color: AppColors.accent, fontSize: 12)),
+                ],
+                const SizedBox(height: 20),
+                const Text('Nearby devices',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                if (p2p.endpoints.isEmpty &&
+                    p2p.pending.isEmpty &&
+                    p2p.connected.isEmpty)
+                  const Text('No devices found yet. Keep both devices unlocked.',
+                      style: TextStyle(color: AppColors.muted)),
+                for (final peer in p2p.endpoints)
+                  _peerTile(peer, 'Connect', () => p2p.connect(peer)),
+                for (final peer in p2p.pending)
+                  _peerTile(peer, 'Accept', () => p2p.accept(peer)),
+                for (final peer in p2p.pending)
+                  _peerTile(peer, 'Reject', () => p2p.reject(peer)),
+                for (final peer in p2p.connected)
+                  _peerTile(peer, 'Send file', () => p2p.sendFile(peer)),
+                const SizedBox(height: 16),
+                const Text('Transfers',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                if (p2p.transfers.isEmpty)
+                  const Text('No transfers yet.',
+                      style: TextStyle(color: AppColors.muted)),
+                for (final transfer in p2p.transfers) _transferTile(transfer),
+                const SizedBox(height: 16),
+                const Text('Received files',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                const Text('Downloads / ISET Community Hub files',
+                    style: TextStyle(fontSize: 11, color: AppColors.muted)),
+                const SizedBox(height: 8),
+                if (received.isEmpty)
+                  const Text('No files received yet.',
+                      style: TextStyle(color: AppColors.muted)),
+                for (final transfer in received)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.insert_drive_file_outlined,
+                        color: AppColors.primary),
+                    title: Text(transfer.fileName),
+                    subtitle: Text(transfer.savedPath ?? 'Saved',
+                        style: const TextStyle(fontSize: 11)),
+                  ),
+              ],
             ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(20),
-          child: FilledButton.icon(
-            onPressed: () {},
-            icon: const Icon(Icons.upload_file),
-            label: const Text('Send a file'),
           ),
         ),
       ],
@@ -258,7 +387,7 @@ class ProfileScreen extends StatelessWidget {
         ListTile(
           leading: const Icon(Icons.logout, color: Colors.redAccent),
           title: const Text('Sign out', style: TextStyle(color: Colors.redAccent)),
-          onTap: () => Navigator.pushReplacementNamed(context, '/login'),
+          onTap: () => context.read<AuthProvider>().signOut(),
         ),
       ],
     );

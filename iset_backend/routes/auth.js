@@ -1,71 +1,82 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const db = require('../db');
+const { authRequired, JWT_SECRET } = require('../middleware/auth');
 
 const router = express.Router();
-const JWT_SECRET = 'your-secret-key-change-this-in-production';
 
 // Register
 router.post('/register', (req, res) => {
-  const { student_id, name, password } = req.body;
-  
+  const { student_id, name, password } = req.body || {};
+
   if (!student_id || !name || !password) {
     return res.status(400).json({ error: 'All fields required' });
   }
+  const sid = String(student_id).trim();
+  const displayName = String(name).trim();
+  if (!sid || !displayName || String(password).length < 6) {
+    return res.status(400).json({ error: 'Invalid input (password must be at least 6 characters)' });
+  }
 
   try {
+    const hash = bcrypt.hashSync(String(password), 10);
     const stmt = db.prepare('INSERT INTO users (student_id, name, password) VALUES (?, ?, ?)');
-    const result = stmt.run(student_id, name, password);
-    
-    res.json({ 
-      message: 'User registered', 
-      user_id: result.lastInsertRowid 
+    const result = stmt.run(sid, displayName, hash);
+
+    res.status(201).json({
+      message: 'User registered',
+      user_id: result.lastInsertRowid
     });
   } catch (error) {
     if (error.message.includes('UNIQUE')) {
-      return res.status(400).json({ error: 'Student ID already exists' });
+      return res.status(409).json({ error: 'Student ID already exists' });
     }
-    res.status(500).json({ error: 'Registration failed' });
+    return res.status(500).json({ error: 'Registration failed' });
   }
 });
 
 // Login
 router.post('/login', (req, res) => {
-  const { student_id, password } = req.body;
-  
-  const user = db.prepare('SELECT * FROM users WHERE student_id = ? AND password = ?').get(student_id, password);
-  
-  if (!user) {
+  const { student_id, password } = req.body || {};
+
+  if (!student_id || !password) {
+    return res.status(400).json({ error: 'All fields required' });
+  }
+
+  const user = db.prepare('SELECT * FROM users WHERE student_id = ?').get(String(student_id).trim());
+
+  if (!user || !bcrypt.compareSync(String(password), user.password)) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
-  const token = jwt.sign({ user_id: user.id, student_id: user.student_id }, JWT_SECRET, { expiresIn: '7d' });
-  
-  res.json({ 
-    token, 
-    user: { 
-      id: user.id, 
-      student_id: user.student_id, 
-      name: user.name 
-    } 
+  const token = jwt.sign(
+    { user_id: user.id, id: user.id, student_id: user.student_id },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+
+  res.json({
+    token,
+    user: {
+      id: user.id,
+      student_id: user.student_id,
+      name: user.name
+    }
   });
 });
 
-module.exports = router;
-
-// Get all users (requires authentication)
-router.get('/users', (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ error: 'Token required' });
-  }
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const users = db.prepare('SELECT id, student_id, name FROM users WHERE id != ?').all(decoded.user_id);
-    res.json({ users });
-  } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
+// Get all users (protected)
+router.get('/users', authRequired, (req, res) => {
+  const users = db.prepare('SELECT id, student_id, name FROM users WHERE id != ?').all(req.user.user_id);
+  res.json({ users });
 });
+
+// Validate/restore a session and fetch current user info (protected)
+router.get('/me', authRequired, (req, res) => {
+  const user = db.prepare('SELECT id, student_id, name FROM users WHERE id = ?').get(req.user.user_id);
+  if (!user) return res.status(401).json({ error: 'User not found' });
+  res.json({ user });
+});
+
+module.exports = router;

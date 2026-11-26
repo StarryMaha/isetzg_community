@@ -1,10 +1,21 @@
 import 'package:flutter/material.dart';
-import '../theme.dart';
+import 'package:provider/provider.dart';
 
-class HomeScreen extends StatelessWidget {
+import '../models/user.dart';
+import '../services/api_client.dart';
+import '../state/auth_provider.dart';
+import '../theme.dart';
+import 'chat_screen.dart';
+
+class HomeScreen extends StatefulWidget {
   final bool isGuest;
   const HomeScreen({super.key, required this.isGuest});
 
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
   static const _shortcuts = [
     (Icons.info_outline, 'ISET info'),
     (Icons.campaign_outlined, 'Announce.'),
@@ -14,6 +25,51 @@ class HomeScreen extends StatelessWidget {
     (Icons.sports_esports_outlined, 'Games'),
     (Icons.smart_toy_outlined, 'AI help'),
   ];
+
+  List<AppUser> _students = const [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStudents();
+  }
+
+  Future<void> _loadStudents() async {
+    if (widget.isGuest) {
+      setState(() => _loading = false);
+      return;
+    }
+    final token = context.read<AuthProvider>().token;
+    if (token == null) {
+      setState(() {
+        _loading = false;
+        _error = 'Session expired. Please sign in again.';
+      });
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final users = await context.read<ApiClient>().fetchUsers(token);
+      if (mounted) {
+        setState(() {
+          _students = users;
+          _loading = false;
+        });
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.message;
+          _loading = false;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -29,9 +85,12 @@ class HomeScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(isGuest ? 'Welcome' : 'Hello, Student',
+                  Text(
+                      widget.isGuest
+                          ? 'Welcome'
+                          : "Hello, ${context.read<AuthProvider>().user?.name ?? 'Student'}",
                       style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
-                  Text(isGuest ? 'Public mode' : 'Student mode',
+                  Text(widget.isGuest ? 'Public mode' : 'Student mode',
                       style: const TextStyle(color: AppColors.muted)),
                 ],
               ),
@@ -78,6 +137,75 @@ class HomeScreen extends StatelessWidget {
             ],
           ),
         ),
+        const SizedBox(height: 20),
+
+        // Student directory (live data from the backend)
+        Row(
+          children: [
+            const Expanded(
+              child: Text('Students', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            ),
+            if (!widget.isGuest)
+              IconButton(
+                onPressed: _loadStudents,
+                icon: const Icon(Icons.refresh, color: AppColors.primary),
+                tooltip: 'Refresh',
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (widget.isGuest)
+          const Text('Sign in to discover other students.',
+              style: TextStyle(color: AppColors.muted))
+        else if (_loading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_error != null)
+          Text(_error!, style: const TextStyle(color: Colors.redAccent, fontSize: 13))
+        else if (_students.isEmpty)
+          const Text('No other students registered yet.',
+              style: TextStyle(color: AppColors.muted))
+        else
+          ..._students.map(
+            (s) => Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: AppColors.surface2,
+                    child: Text(s.name.isNotEmpty ? s.name[0].toUpperCase() : '?',
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(s.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                        Text(s.studentId,
+                            style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.chat_bubble_outline,
+                        size: 18, color: AppColors.muted),
+                    tooltip: 'Message',
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => ChatScreen(peer: s)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         const SizedBox(height: 20),
 
         // Shortcuts
