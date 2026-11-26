@@ -102,11 +102,13 @@ class ChatsScreen extends StatelessWidget {
             ),
           ),
           if (chat.offlineMode)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 2),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
               child: Text(
-                "You're in offline mode. Nearby messaging starts automatically when available.",
-                style: TextStyle(color: AppColors.accent, fontSize: 12),
+                chat.autoNearby
+                    ? "You're in offline mode. Nearby messaging starts automatically when available."
+                    : "You're in offline mode. Auto Nearby is off; use Files to connect manually.",
+                style: const TextStyle(color: AppColors.accent, fontSize: 12),
               ),
             ),
           Expanded(

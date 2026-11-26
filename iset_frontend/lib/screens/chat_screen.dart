@@ -95,7 +95,9 @@ class _ChatScreenState extends State<ChatScreen> {
                             ? 'Online • messages sync through the server'
                             : nearbyReady
                                 ? "You're in offline mode • sending via Nearby"
-                                : "You're in offline mode • connect nearby to send",
+                                : !chat.autoNearby
+                                    ? "You're in offline mode • Auto Nearby is off"
+                                    : "You're in offline mode • connect nearby to send",
                     style: const TextStyle(
                         color: AppColors.accent, fontSize: 12),
                   ),

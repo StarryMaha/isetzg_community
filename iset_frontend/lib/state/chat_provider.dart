@@ -152,8 +152,13 @@ class ChatProvider extends ChangeNotifier {
     if (value == _autoNearby) return;
     _autoNearby = value;
     unawaited(_prefs.setBool(_autoNearbyKey, value));
-    if (value && _connection != ChatConnection.online) {
-      _activateNearbyIfAllowed();
+    if (_connection != ChatConnection.online) {
+      final p2p = _p2p;
+      if (value) {
+        _activateNearbyIfAllowed();
+      } else if (p2p != null && p2p.running) {
+        unawaited(p2p.stop());
+      }
     }
     notifyListeners();
   }
