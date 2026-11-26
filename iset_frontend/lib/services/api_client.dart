@@ -9,7 +9,12 @@ import '../models/user.dart';
 
 class ApiException implements Exception {
   final String message;
-  const ApiException(this.message);
+
+  /// True when the request failed because the device has no usable network path
+  /// to the server. The UI shows the friendly offline message for these.
+  final bool isNetworkError;
+
+  const ApiException(this.message, {this.isNetworkError = false});
   @override
   String toString() => message;
 }
@@ -43,9 +48,15 @@ class ApiClient {
           : _client.get(uri, headers: headers);
       response = await request.timeout(_timeout);
     } on TimeoutException {
-      throw const ApiException('Server timed out. Check your connection.');
-    } on http.ClientException catch (e) {
-      throw ApiException('Cannot reach server: ${e.message}');
+      throw const ApiException(
+        "You're in offline mode. Check your connection.",
+        isNetworkError: true,
+      );
+    } on http.ClientException {
+      throw const ApiException(
+        "You're in offline mode. Check your connection.",
+        isNetworkError: true,
+      );
     }
 
     Map<String, dynamic> data;

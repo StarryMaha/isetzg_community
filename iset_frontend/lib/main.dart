@@ -32,7 +32,9 @@ class IsetApp extends StatelessWidget {
             return auth;
           },
         ),
-        ChangeNotifierProvider<P2PProvider>(create: (_) => P2PProvider()),
+        ChangeNotifierProvider<P2PProvider>(
+          create: (_) => P2PProvider(prefs: prefs),
+        ),
         ChangeNotifierProxyProvider<AuthProvider, ChatProvider>(
           create: (ctx) => ChatProvider(
             ctx.read<ApiClient>(),

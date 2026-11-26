@@ -52,7 +52,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final p2p = context.watch<P2PProvider>();
     final myId = context.read<AuthProvider>().user?.id;
     final messages = chat.messages(widget.peer.id);
-    final online = chat.onlineUsers.contains(widget.peer.id);
     final nearbyReady = p2p.isConnectedTo(widget.peer.name);
 
     return Scaffold(
@@ -66,11 +65,13 @@ class _ChatScreenState extends State<ChatScreen> {
                 Icon(
                   Icons.circle,
                   size: 10,
-                  color: online ? AppColors.primary : AppColors.muted,
+                  color: chat.connection == ChatConnection.online
+                      ? AppColors.primary
+                      : AppColors.accent,
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  online ? 'Online' : 'Offline',
+                  chat.modeLabel,
                   style: const TextStyle(color: AppColors.muted, fontSize: 13),
                 ),
               ],
@@ -80,21 +81,35 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: [
-          if (chat.connection != ChatConnection.online)
-            Container(
-              width: double.infinity,
-              color: AppColors.surface2,
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-              child: Text(
-                chat.connection == ChatConnection.connecting
-                    ? 'Connecting to chat server…'
-                    : nearbyReady
-                        ? 'Server offline — messages will use Nearby'
-                        : 'Server offline — connect nearby to send messages',
-                style: const TextStyle(color: AppColors.accent, fontSize: 12),
-                textAlign: TextAlign.center,
-              ),
+          Container(
+            width: double.infinity,
+            color: AppColors.surface2,
+            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    chat.connection == ChatConnection.connecting
+                        ? 'Connecting…'
+                        : chat.connection == ChatConnection.online
+                            ? 'Online • messages sync through the server'
+                            : nearbyReady
+                                ? "You're in offline mode • sending via Nearby"
+                                : "You're in offline mode • connect nearby to send",
+                    style: const TextStyle(
+                        color: AppColors.accent, fontSize: 12),
+                  ),
+                ),
+                const Text('Auto Nearby',
+                    style: TextStyle(fontSize: 11, color: AppColors.muted)),
+                Switch(
+                  value: chat.autoNearby,
+                  onChanged: chat.setAutoNearby,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ],
             ),
+          ),
           Expanded(
             child: chat.isLoading(widget.peer.id)
                 ? const Center(child: CircularProgressIndicator())

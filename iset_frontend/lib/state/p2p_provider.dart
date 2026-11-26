@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/p2p/android_nearby.dart';
 
@@ -9,6 +12,37 @@ class Peer {
   final String name;
 
   const Peer({required this.id, required this.name});
+}
+
+/// Payload shown in "My device QR" and read by the scanner.
+/// Format: `ISET1|<6 hex chars>|<friendly name>`
+class NearbyQrPayload {
+  final String code;
+  final String? name;
+
+  const NearbyQrPayload(this.code, {this.name});
+
+  static final RegExp _codePattern = RegExp(r'^[A-F0-9]{6}$');
+
+  static NearbyQrPayload? parse(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+
+    final parts = trimmed.split('|');
+    if (parts.first == 'ISET1' && parts.length >= 2) {
+      final code = parts[1].trim().toUpperCase();
+      if (_codePattern.hasMatch(code)) {
+        final name = parts.length > 2 ? parts.sublist(2).join('|').trim() : null;
+        return NearbyQrPayload(code, name: name?.isEmpty == true ? null : name);
+      }
+    }
+
+    if (trimmed.toUpperCase().startsWith('ISET-')) {
+      final code = trimmed.substring(5).trim().toUpperCase();
+      if (_codePattern.hasMatch(code)) return NearbyQrPayload(code);
+    }
+    return null;
+  }
 }
 
 enum TransferKind { incoming, outgoing }
@@ -50,30 +84,36 @@ class NearbyChatMessage {
 /// Exposes Android Nearby Connections state to the UI. All Android-only calls
 /// live in android_nearby.dart and are only made when [supported] is true.
 class P2PProvider extends ChangeNotifier {
-  P2PProvider() {
+  P2PProvider({SharedPreferences? prefs})
+      : _deviceCode = _initialCode(prefs) {
     if (supported) {
       _service = AndroidNearby(
-        onEndpointFound: (id, name) => _addUnique(_endpoints, Peer(id: id, name: name)),
+        onEndpointFound: (id, name) =>
+            _addUnique(_endpoints, Peer(id: id, name: _friendlyName(name))),
         onEndpointLost: (id) => _remove(_endpoints, id),
         onConnectionInitiated: (id, name) {
-          _addUnique(_pending, Peer(id: id, name: name));
-          _status = '$name wants to connect';
+          final friendly = _friendlyName(name);
+          _addUnique(_pending, Peer(id: id, name: friendly));
+          _status = '$friendly wants to connect';
           notifyListeners();
         },
         onConnectionResult: (id, connected) {
-          _remove(_pending, id);
-          if (connected) {
-            final peer = _endpoints.firstWhere(
+          final peer = _endpoints.firstWhere(
+            (p) => p.id == id,
+            orElse: () => _pending.firstWhere(
               (p) => p.id == id,
               orElse: () => Peer(
                     id: id,
                     name: id.length > 6 ? id.substring(0, 6) : id,
                   ),
-            );
+            ),
+          );
+          _remove(_pending, id);
+          if (connected) {
             _addUnique(_connected, peer);
             _status = 'Connected to ${peer.name}';
           } else {
-            _status = 'Connection failed';
+            _status = 'Connection failed. Try again.';
           }
           notifyListeners();
         },
@@ -86,7 +126,10 @@ class P2PProvider extends ChangeNotifier {
           try {
             final text = utf8.decode(bytes);
             if (text.startsWith(AndroidNearby.chatPrefix)) {
-              _receiveChat(endpointId, text.substring(AndroidNearby.chatPrefix.length));
+              _receiveChat(
+                endpointId,
+                text.substring(AndroidNearby.chatPrefix.length),
+              );
             } else {
               _controlPayloadIds.add(payloadId);
               final separator = text.indexOf(':');
@@ -123,9 +166,10 @@ class P2PProvider extends ChangeNotifier {
           final transfer = _transfers.firstWhere(
             (t) => t.payloadId == payloadId,
             orElse: () => TransferItem(
-                payloadId: payloadId,
-                fileName: 'transfer_$payloadId',
-                kind: TransferKind.incoming),
+              payloadId: payloadId,
+              fileName: 'transfer_$payloadId',
+              kind: TransferKind.incoming,
+            ),
           );
           if (!_transfers.contains(transfer)) _transfers.add(transfer);
           transfer.transferred = transferred;
@@ -148,9 +192,27 @@ class P2PProvider extends ChangeNotifier {
     }
   }
 
+  static const _codeKey = 'nearby_pairing_code';
+  static final RegExp _codePattern = RegExp(r'^[A-F0-9]{6}$');
+
+  static String _initialCode(SharedPreferences? prefs) {
+    final saved = prefs?.getString(_codeKey);
+    if (saved != null && _codePattern.hasMatch(saved.toUpperCase())) {
+      return saved.toUpperCase();
+    }
+    final random = Random.secure();
+    final code = List<int>.generate(3, (_) => random.nextInt(256))
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0').toUpperCase())
+        .join();
+    prefs?.setString(_codeKey, code);
+    return code;
+  }
+
   final bool supported = defaultTargetPlatform == TargetPlatform.android;
   AndroidNearby? _service;
 
+  final String _deviceCode;
+  final Map<String, String> _qrNames = {};
   String _myName = 'ISET student';
   bool _running = false;
   String _status = '';
@@ -174,27 +236,116 @@ class P2PProvider extends ChangeNotifier {
   List<TransferItem> get transfers => List.unmodifiable(_transfers);
   List<NearbyChatMessage> get chatMessages => List.unmodifiable(_chatMessages);
 
+  /// Stable short code advertised by Nearby and shown in the device QR.
+  String get pairingCode => 'ISET-$_deviceCode';
+
+  String get qrPayload => 'ISET1|$_deviceCode|${_myName.trim()}';
+
+  String? _codeFromAdvertised(String advertised) {
+    final trimmed = advertised.trim();
+    if (trimmed.toUpperCase().startsWith('ISET-')) {
+      return trimmed.substring(5).trim().toUpperCase();
+    }
+    return null;
+  }
+
+  String _friendlyName(String advertised) {
+    final code = _codeFromAdvertised(advertised);
+    if (code != null && _qrNames.containsKey(code)) return _qrNames[code]!;
+    return advertised;
+  }
+
+  void setDisplayName(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || trimmed == _myName) return;
+    _myName = trimmed;
+    notifyListeners();
+  }
+
   bool isConnectedTo(String peerName) =>
       _connected.any((p) => p.name == peerName);
 
   Future<void> start(String myName) async {
     final service = _service;
     if (service == null || _running) return;
-    _myName = myName;
-    final granted = await service.requestPermissions();
-    _status = granted
-        ? 'Searching for nearby devices…'
-        : 'Some permissions denied; discovery may fail';
+    setDisplayName(myName);
+
+    // Root-cause fix: actually honour the permission check and use only the
+    // permissions relevant to this Android version.
+    final permission = await service.requestPermissions();
+    if (!permission.ok) {
+      _running = false;
+      _status = permission.message ?? 'Nearby permissions are missing.';
+      notifyListeners();
+      return;
+    }
+
+    _status = 'Searching for nearby devices…';
     notifyListeners();
     try {
-      final started = await service.start(_myName);
+      final started = await service.start(pairingCode, _myName);
       _running = started;
-      _status = started ? 'Searching for nearby devices…' : 'Could not start discovery';
+      _status = started
+          ? 'Searching for nearby devices…'
+          : 'Nearby could not start. Check Google Play Services and try again.';
     } catch (error) {
       _running = false;
-      _status = 'Nearby unavailable: $error';
+      _status = 'Nearby could not start. ${_friendlyError(error)}';
     }
     notifyListeners();
+  }
+
+  String _friendlyError(Object error) {
+    final text = error.toString();
+    if (text.contains('8001')) return 'Nearby was already active. Try again.';
+    if (text.contains('8022')) return 'A Nearby permission was denied.';
+    if (text.contains('8032')) return 'A required Nearby permission is missing.';
+    if (text.contains('8034')) return 'Turn on Bluetooth and try again.';
+    return 'Make sure Google Play Services is available, then try again.';
+  }
+
+  /// Scans a QR payload, starts Nearby if needed, then connects to the matching
+  /// advertising device. Returns false with a readable [status] on failure.
+  Future<bool> connectByQr(String raw) async {
+    final payload = NearbyQrPayload.parse(raw);
+    if (payload == null) {
+      _status = 'That QR code is not an ISET device code.';
+      notifyListeners();
+      return false;
+    }
+
+    if (payload.code == _deviceCode.toUpperCase()) {
+      _status = 'That is your own QR code. Scan your classmate\'s code.';
+      notifyListeners();
+      return false;
+    }
+
+    if (payload.name != null) _qrNames[payload.code] = payload.name!;
+
+    if (!_running) {
+      await start(_myName);
+      if (!_running) return false;
+    }
+
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    while (!DateTime.now().isAfter(deadline)) {
+      final endpoint = _endpoints.firstWhere(
+        (p) => _codeFromAdvertised(p.name) == payload.code,
+        orElse: () => const Peer(id: '', name: ''),
+      );
+      if (endpoint.id.isNotEmpty) {
+        final peerName = payload.name ?? endpoint.name;
+        _status = 'Found $peerName. Sending connect request…';
+        notifyListeners();
+        await connect(Peer(id: endpoint.id, name: peerName));
+        return true;
+      }
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
+
+    _status = 'Could not find that device yet. Keep its QR screen open and try again.';
+    notifyListeners();
+    return false;
   }
 
   Future<void> stop() async {
@@ -216,7 +367,7 @@ class P2PProvider extends ChangeNotifier {
       await service.requestConnection(_myName, peer.id);
       _status = 'Connection request sent to ${peer.name}';
     } catch (error) {
-      _status = 'Connection request failed: $error';
+      _status = 'Connection request failed: ${_friendlyError(error)}';
     }
     notifyListeners();
   }
@@ -278,7 +429,7 @@ class P2PProvider extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (error) {
-      _status = 'Nearby message failed: $error';
+      _status = 'Nearby message failed: ${_friendlyError(error)}';
       notifyListeners();
       return false;
     }
@@ -313,7 +464,8 @@ class P2PProvider extends ChangeNotifier {
 
   @override
   void dispose() {
-    _service?.stop();
+    final service = _service;
+    if (service != null) unawaited(service.stop());
     super.dispose();
   }
 }

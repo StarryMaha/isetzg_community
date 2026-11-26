@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../models/user.dart';
 import '../state/auth_provider.dart';
@@ -7,6 +8,7 @@ import '../state/chat_provider.dart';
 import '../state/p2p_provider.dart';
 import '../theme.dart';
 import 'chat_screen.dart';
+import 'qr_scan_screen.dart';
 
 /// Shown to guests on screens that need an account.
 class LockedView extends StatelessWidget {
@@ -68,14 +70,43 @@ class ChatsScreen extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const _Header('Chats'),
-          if (chat.connection != ChatConnection.online)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
+            child: Row(
+              children: [
+                Icon(
+                  chat.connection == ChatConnection.online
+                      ? Icons.cloud_done_outlined
+                      : chat.connection == ChatConnection.connecting
+                          ? Icons.sync
+                          : Icons.cloud_off_outlined,
+                  size: 16,
+                  color: chat.connection == ChatConnection.online
+                      ? AppColors.primary
+                      : AppColors.accent,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  chat.modeLabel,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                const Spacer(),
+                const Text('Auto Nearby',
+                    style: TextStyle(fontSize: 12, color: AppColors.muted)),
+                Switch(
+                  value: chat.autoNearby,
+                  onChanged: chat.setAutoNearby,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ],
+            ),
+          ),
+          if (chat.offlineMode)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 2),
               child: Text(
-                chat.connection == ChatConnection.connecting
-                    ? 'Connecting…'
-                    : 'Not connected to chat server — nearby chat available from Files',
-                style: const TextStyle(color: AppColors.accent, fontSize: 12),
+                "You're in offline mode. Nearby messaging starts automatically when available.",
+                style: TextStyle(color: AppColors.accent, fontSize: 12),
               ),
             ),
           Expanded(
@@ -198,6 +229,78 @@ class FilesScreen extends StatefulWidget {
 }
 
 class _FilesScreenState extends State<FilesScreen> {
+  @override
+  void initState() {
+    super.initState();
+    final name = context.read<AuthProvider>().user?.name ?? 'ISET student';
+    context.read<P2PProvider>().setDisplayName(name);
+  }
+
+  Future<void> _showMyQr(String myName) async {
+    final p2p = context.read<P2PProvider>();
+    if (!p2p.running) await p2p.start(myName);
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('My device QR'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              color: Colors.white,
+              child: QrImageView(
+                data: p2p.qrPayload,
+                version: QrVersions.auto,
+                size: 200,
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.black,
+                errorStateBuilder: (_, __) => const SizedBox(
+                  height: 200,
+                  child: Center(child: Text('QR unavailable',
+                      style: TextStyle(color: Colors.black))),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(p2p.pairingCode,
+                style: const TextStyle(
+                    fontWeight: FontWeight.w800, letterSpacing: 1.5)),
+            const SizedBox(height: 8),
+            Text(
+              p2p.running
+                  ? 'Keep this screen open while the other device scans.'
+                  : p2p.status,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _scanQr() async {
+    final raw = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const QrScanScreen()),
+    );
+    if (raw == null || !mounted) return;
+    final p2p = context.read<P2PProvider>();
+    await p2p.connectByQr(raw);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(p2p.status.isEmpty ? 'QR scanned' : p2p.status)),
+    );
+  }
+
   Widget _peerTile(Peer peer, String action, VoidCallback onPressed) {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -298,6 +401,53 @@ class _FilesScreenState extends State<FilesScreen> {
                   Text(p2p.status,
                       style: const TextStyle(color: AppColors.accent, fontSize: 12)),
                 ],
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Quick connect with QR',
+                          style: TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Show your code or scan a classmate\'s code to connect without searching.',
+                        style: TextStyle(color: AppColors.muted, fontSize: 12),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () => _showMyQr(myName),
+                              icon: const Icon(Icons.qr_code_2, size: 18),
+                              label: const Text('Show my QR'),
+                              style: OutlinedButton.styleFrom(
+                                minimumSize: const Size(0, 44),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _scanQr,
+                              icon: const Icon(Icons.qr_code_scanner, size: 18),
+                              label: const Text('Scan QR'),
+                              style: OutlinedButton.styleFrom(
+                                minimumSize: const Size(0, 44),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 20),
                 const Text('Nearby devices',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),

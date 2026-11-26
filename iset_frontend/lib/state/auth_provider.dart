@@ -48,7 +48,9 @@ class AuthProvider extends ChangeNotifier {
       final cachedId = _prefs.getInt(_idKey);
       final cachedStudentId = _prefs.getString(_sidKey);
       final cachedName = _prefs.getString(_nameKey);
-      final looksOffline = e.message.contains('Cannot reach') ||
+      final looksOffline = e.isNetworkError ||
+          e.message.contains('Cannot reach') ||
+          e.message.contains('offline mode') ||
           e.message.contains('timed out');
 
       if (looksOffline &&

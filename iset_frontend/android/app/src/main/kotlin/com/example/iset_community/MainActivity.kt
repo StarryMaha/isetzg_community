@@ -1,5 +1,6 @@
 package com.example.iset_community
 
+import android.bluetooth.BluetoothManager
 import android.content.ContentValues
 import android.net.Uri
 import android.os.Build
@@ -14,6 +15,7 @@ import java.io.FileOutputStream
 class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL = "com.iset.community/files"
+        private const val DEVICE_CHANNEL = "com.iset.community/device"
         private const val FOLDER = "ISET Community Hub files"
     }
 
@@ -33,6 +35,22 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DEVICE_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "sdkInt" -> result.success(Build.VERSION.SDK_INT)
+                    "bluetoothEnabled" -> result.success(isBluetoothEnabled())
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    private fun isBluetoothEnabled(): Boolean = try {
+        getSystemService(BluetoothManager::class.java)?.adapter?.isEnabled == true
+    } catch (_: SecurityException) {
+        false
+    } catch (_: Exception) {
+        false
     }
 
     private fun saveReceivedFile(source: String, name: String): Boolean {

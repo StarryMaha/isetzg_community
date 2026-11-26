@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -14,11 +15,14 @@ import 'p2p_provider.dart';
 enum ChatConnection { offline, connecting, online, failed }
 
 class ChatProvider extends ChangeNotifier {
-  ChatProvider(this._api, this._prefs, {P2PProvider? p2p}) : _p2p = p2p {
+  ChatProvider(this._api, this._prefs, {P2PProvider? p2p})
+      : _p2p = p2p,
+        _autoNearby = _prefs.getBool(_autoNearbyKey) ?? true {
     _p2p?.onChatText = _onNearbyText;
   }
 
   static const _contactsKey = 'cached_contacts';
+  static const _autoNearbyKey = 'auto_nearby_switch';
 
   final ApiClient _api;
   final SharedPreferences _prefs;
@@ -35,6 +39,9 @@ class ChatProvider extends ChangeNotifier {
   bool _sending = false;
   String? _error;
   String? _lastDelivery;
+  bool _autoNearby;
+  bool _offlineMode = false;
+  String _myName = 'ISET student';
 
   ChatConnection get connection => _connection;
   List<AppUser> get contacts => _contacts;
@@ -42,6 +49,19 @@ class ChatProvider extends ChangeNotifier {
   bool get sending => _sending;
   String? get error => _error;
   String? get lastDelivery => _lastDelivery;
+  bool get autoNearby => _autoNearby;
+  bool get offlineMode => _offlineMode;
+
+  String get modeLabel {
+    switch (_connection) {
+      case ChatConnection.online:
+        return 'Online';
+      case ChatConnection.connecting:
+        return 'Connecting…';
+      default:
+        return "Offline mode";
+    }
+  }
 
   bool isLoading(int userId) => _loadingThreads.contains(userId);
   List<ChatMessage> messages(int userId) => _threads[userId] ?? const [];
@@ -54,6 +74,11 @@ class ChatProvider extends ChangeNotifier {
   void update(AuthProvider auth) {
     final token = auth.status == AuthStatus.authenticated ? auth.token : null;
     final myId = auth.user?.id;
+    final name = auth.user?.name.trim() ?? 'ISET student';
+    if (name.isNotEmpty && name != _myName) {
+      _myName = name;
+      _p2p?.setDisplayName(name);
+    }
     if (token == _token && myId == _myId) return;
     _token = token;
     _myId = myId;
@@ -64,6 +89,7 @@ class ChatProvider extends ChangeNotifier {
       _threads.clear();
       _onlineUsers.clear();
       _connection = ChatConnection.offline;
+      _offlineMode = false;
       _prefs.remove(_contactsKey);
       Future.microtask(notifyListeners);
       return;
@@ -90,17 +116,11 @@ class ChatProvider extends ChangeNotifier {
 
     socket.onConnect((_) {
       _connection = ChatConnection.online;
+      _offlineMode = false;
       notifyListeners();
     });
-    socket.onDisconnect((_) {
-      _connection = ChatConnection.offline;
-      _onlineUsers.clear();
-      notifyListeners();
-    });
-    socket.onConnectError((_) {
-      _connection = ChatConnection.failed;
-      notifyListeners();
-    });
+    socket.onDisconnect((_) => _handleNetworkLoss());
+    socket.onConnectError((_) => _handleNetworkLoss());
     socket.on('users:online', (data) {
       final ids = (data as List<dynamic>)
           .map((e) => e is int ? e : int.parse(e.toString()))
@@ -127,14 +147,41 @@ class ChatProvider extends ChangeNotifier {
     _socket = null;
   }
 
+  /// Visible user control for automatic offline -> Nearby switching.
+  void setAutoNearby(bool value) {
+    if (value == _autoNearby) return;
+    _autoNearby = value;
+    unawaited(_prefs.setBool(_autoNearbyKey, value));
+    if (value && _connection != ChatConnection.online) {
+      _activateNearbyIfAllowed();
+    }
+    notifyListeners();
+  }
+
+  void _handleNetworkLoss() {
+    _connection = ChatConnection.offline;
+    _onlineUsers.clear();
+    _offlineMode = true;
+    _activateNearbyIfAllowed();
+    notifyListeners();
+  }
+
+  void _activateNearbyIfAllowed() {
+    final p2p = _p2p;
+    if (!_autoNearby || p2p == null || !p2p.supported || p2p.running) return;
+    p2p.setDisplayName(_myName);
+    unawaited(p2p.start(_myName));
+  }
+
   Future<void> refreshContacts() async {
     final token = _token;
     if (token == null) return;
     try {
       _contacts = await _api.fetchUsers(token);
       await _cacheContacts();
-    } on ApiException catch (_) {
-      // Keep the cached list; the banner shows the server problem.
+    } on ApiException catch (error) {
+      // Keep the cached list; switch to Nearby if this was a network failure.
+      if (error.isNetworkError) _handleNetworkLoss();
     }
     notifyListeners();
   }
@@ -145,9 +192,10 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
     try {
       _threads[otherId] = await _api.fetchConversation(_token!, otherId);
-    } on ApiException catch (_) {
+    } on ApiException catch (error) {
       // Keep any Nearby messages already received for this peer.
       if (_threads[otherId] == null) _threads[otherId] = <ChatMessage>[];
+      if (error.isNetworkError) _handleNetworkLoss();
     } finally {
       _loadingThreads.remove(otherId);
       notifyListeners();
@@ -165,6 +213,8 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
+      if (_offlineMode) _activateNearbyIfAllowed();
+
       if (token != null) {
         try {
           // Primary path: save to the server so history and live delivery work.
@@ -173,15 +223,19 @@ class ChatProvider extends ChangeNotifier {
           _lastDelivery = 'server';
           return true;
         } on ApiException catch (serverError) {
-          // Fallback: direct device-to-device text over the Nearby connection.
-          if (await _sendViaNearby(receiverId, text)) {
-            _lastDelivery = 'nearby';
-            return true;
+          final networkDown = serverError.isNetworkError ||
+              serverError.message.contains('offline mode');
+          if (networkDown) {
+            _handleNetworkLoss();
+            // Fallback: direct device-to-device text over the Nearby connection.
+            if (await _sendViaNearby(receiverId, text)) {
+              _lastDelivery = 'nearby';
+              return true;
+            }
+            _error = "You're in offline mode. Connect to another device nearby to send.";
+            return false;
           }
-          final peerName = _contactName(receiverId);
-          _error = peerName == null
-              ? '${serverError.message}. No nearby peer is connected.'
-              : '${serverError.message}. $peerName is not connected nearby.';
+          _error = serverError.message;
           return false;
         }
       }
@@ -190,10 +244,10 @@ class ChatProvider extends ChangeNotifier {
         _lastDelivery = 'nearby';
         return true;
       }
-      _error = 'Not signed in and no nearby peer is connected.';
+      _error = "You're in offline mode. Connect to another device nearby to send.";
       return false;
-    } catch (e) {
-      _error = e.toString();
+    } catch (_) {
+      _error = 'Something went wrong. Please try again.';
       return false;
     } finally {
       _sending = false;
@@ -240,7 +294,7 @@ class ChatProvider extends ChangeNotifier {
 
   void _onNearbyText(String peerName, String text) {
     final contact = _contacts.firstWhere(
-      (c) => c.name == peerName,
+      (c) => c.name.toLowerCase() == peerName.toLowerCase(),
       orElse: () => const AppUser(id: -1, studentId: '', name: ''),
     );
     if (contact.id == -1) return;
