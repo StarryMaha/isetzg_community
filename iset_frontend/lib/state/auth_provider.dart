@@ -44,12 +44,34 @@ class AuthProvider extends ChangeNotifier {
     }
     try {
       _user = await _api.fetchMe(token);
-      _status = AuthStatus.authenticated;
     } on ApiException catch (e) {
-      await _clearSession();
-      _error = e.message;
-      _status = AuthStatus.unauthenticated;
+      final cachedId = _prefs.getInt(_idKey);
+      final cachedStudentId = _prefs.getString(_sidKey);
+      final cachedName = _prefs.getString(_nameKey);
+      final looksOffline = e.isNetworkError ||
+          e.message.contains('Cannot reach') ||
+          e.message.contains('offline mode') ||
+          e.message.contains('timed out');
+
+      if (looksOffline &&
+          cachedId != null &&
+          cachedStudentId != null &&
+          cachedName != null) {
+        // Keep the cached session so Nearby-only chat works without a server.
+        _user = AppUser(
+          id: cachedId,
+          studentId: cachedStudentId,
+          name: cachedName,
+        );
+      } else {
+        await _clearSession();
+        _error = e.message;
+        _status = AuthStatus.unauthenticated;
+        notifyListeners();
+        return;
+      }
     }
+    _status = AuthStatus.authenticated;
     notifyListeners();
   }
 

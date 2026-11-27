@@ -1,5 +1,6 @@
 package com.example.iset_community
 
+import android.bluetooth.BluetoothManager
 import android.content.ContentValues
 import android.net.Uri
 import android.os.Build
@@ -14,6 +15,7 @@ import java.io.FileOutputStream
 class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL = "com.iset.community/files"
+        private const val DEVICE_CHANNEL = "com.iset.community/device"
         private const val FOLDER = "ISET Community Hub files"
     }
 
@@ -27,12 +29,41 @@ class MainActivity : FlutterActivity() {
                     if (source == null || name == null) {
                         result.error("INVALID_ARGUMENTS", "source and name are required", null)
                     } else {
-                        result.success(saveReceivedFile(source, name))
+                        try {
+                            val safeName = File(name).name.ifEmpty { "received_file" }
+                            if (saveReceivedFile(source, safeName)) {
+                                result.success(true)
+                            } else {
+                                result.error("SAVE_FAILED", "Could not save $safeName", null)
+                            }
+                        } catch (e: Exception) {
+                            result.error(
+                                "SAVE_FAILED",
+                                e.message ?: "Could not save the received file",
+                                null,
+                            )
+                        }
                     }
                 }
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DEVICE_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "sdkInt" -> result.success(Build.VERSION.SDK_INT)
+                    "bluetoothEnabled" -> result.success(isBluetoothEnabled())
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    private fun isBluetoothEnabled(): Boolean = try {
+        getSystemService(BluetoothManager::class.java)?.adapter?.isEnabled == true
+    } catch (_: SecurityException) {
+        false
+    } catch (_: Exception) {
+        false
     }
 
     private fun saveReceivedFile(source: String, name: String): Boolean {
