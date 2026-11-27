@@ -59,15 +59,20 @@ class ApiClient {
       );
     }
 
-    Map<String, dynamic> data;
+    dynamic data;
     try {
-      data = jsonDecode(response.body) as Map<String, dynamic>;
+      data = jsonDecode(response.body);
     } catch (_) {
       throw ApiException('Unexpected server response (${response.statusCode})');
     }
 
     if (response.statusCode >= 200 && response.statusCode < 300) return data;
-    throw ApiException(data['error']?.toString() ?? 'Request failed (${response.statusCode})');
+
+    final serverMessage = data is Map<String, dynamic>
+        ? data['error']?.toString()
+        : null;
+    throw ApiException(
+        serverMessage ?? 'Request failed (${response.statusCode})');
   }
 
   Future<void> register({
@@ -84,8 +89,9 @@ class ApiClient {
     required String studentId,
     required String password,
   }) async {
-    final data = await _send('/api/auth/login',
-        method: 'POST', body: {'student_id': studentId, 'password': password});
+    final data = (await _send('/api/auth/login',
+            method: 'POST', body: {'student_id': studentId, 'password': password}))
+        as Map<String, dynamic>;
     return AuthResult(
       token: data['token'] as String,
       user: AppUser.fromJson(data['user'] as Map<String, dynamic>),
@@ -93,12 +99,12 @@ class ApiClient {
   }
 
   Future<AppUser> fetchMe(String token) async {
-    final data = await _send('/api/auth/me', token: token);
+    final data = (await _send('/api/auth/me', token: token)) as Map<String, dynamic>;
     return AppUser.fromJson(data['user'] as Map<String, dynamic>);
   }
 
   Future<List<AppUser>> fetchUsers(String token) async {
-    final data = await _send('/api/auth/users', token: token);
+    final data = (await _send('/api/auth/users', token: token)) as Map<String, dynamic>;
     final list = data['users'] as List<dynamic>;
     return list
         .map((u) => AppUser.fromJson(u as Map<String, dynamic>))
@@ -107,10 +113,24 @@ class ApiClient {
 
   Future<List<ChatMessage>> fetchConversation(String token, int otherId) async {
     final data = await _send('/api/messages/$otherId', token: token);
-    final list = data as List<dynamic>;
+    final list = _conversationList(data);
     return list
         .map((m) => ChatMessage.fromJson(m as Map<String, dynamic>))
         .toList(growable: false);
+  }
+
+  /// The backend currently returns a bare JSON array. A small wrapper object
+  /// is also accepted so older/newer API shapes can both be read without
+  /// losing messages.
+  static List<dynamic> _conversationList(dynamic data) {
+    if (data is List<dynamic>) return data;
+    if (data is Map<String, dynamic>) {
+      for (final key in const ['messages', 'conversation', 'history']) {
+        final value = data[key];
+        if (value is List<dynamic>) return value;
+      }
+    }
+    throw const ApiException('Unexpected conversation response');
   }
 
   Future<ChatMessage> sendMessage(
@@ -118,12 +138,12 @@ class ApiClient {
     int receiverId,
     String content,
   ) async {
-    final data = await _send(
+    final data = (await _send(
       '/api/messages/send',
       method: 'POST',
       token: token,
       body: {'receiver_id': receiverId, 'content': content.trim()},
-    );
-    return ChatMessage.fromJson(data as Map<String, dynamic>);
+    )) as Map<String, dynamic>;
+    return ChatMessage.fromJson(data);
   }
 }

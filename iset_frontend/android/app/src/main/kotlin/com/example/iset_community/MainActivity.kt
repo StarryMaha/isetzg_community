@@ -29,7 +29,20 @@ class MainActivity : FlutterActivity() {
                     if (source == null || name == null) {
                         result.error("INVALID_ARGUMENTS", "source and name are required", null)
                     } else {
-                        result.success(saveReceivedFile(source, name))
+                        try {
+                            val safeName = File(name).name.ifEmpty { "received_file" }
+                            if (saveReceivedFile(source, safeName)) {
+                                result.success(true)
+                            } else {
+                                result.error("SAVE_FAILED", "Could not save $safeName", null)
+                            }
+                        } catch (e: Exception) {
+                            result.error(
+                                "SAVE_FAILED",
+                                e.message ?: "Could not save the received file",
+                                null,
+                            )
+                        }
                     }
                 }
                 else -> result.notImplemented()

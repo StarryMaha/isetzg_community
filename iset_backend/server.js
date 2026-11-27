@@ -1,4 +1,11 @@
-﻿require('dotenv').config();
+﻿// Local-only config is loaded first; dotenv does not override existing values.
+require('dotenv').config({ path: '.env.local' });
+require('dotenv').config();
+
+if (!process.env.JWT_SECRET) {
+  console.error('JWT_SECRET is missing. Add it to iset_backend/.env.local and restart the backend.');
+  process.exit(1);
+}
 
 const express = require('express');
 const cors = require('cors');

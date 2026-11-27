@@ -81,6 +81,7 @@ class AndroidNearby {
       Permission.bluetoothConnect,
       Permission.bluetoothScan,
       if (sdk >= 33) Permission.nearbyWifiDevices else Permission.location,
+      if (sdk < 29) Permission.storage,
     ];
 
     final results = await permissions.request();
@@ -128,6 +129,8 @@ class AndroidNearby {
         return 'Nearby devices (Wi-Fi)';
       case Permission.location:
         return 'Location';
+      case Permission.storage:
+        return 'Storage';
       default:
         return 'Nearby permissions';
     }
@@ -263,6 +266,7 @@ class AndroidNearby {
           <String, String>{'source': uri, 'name': fileName},
         ) ??
         false;
-    return saved ? 'Download/$receivedFolder/$fileName' : null;
+    if (!saved) return null;
+    return 'Download/$receivedFolder/$fileName';
   }
 }

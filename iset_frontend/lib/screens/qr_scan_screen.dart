@@ -16,19 +16,19 @@ class QrScanScreen extends StatefulWidget {
 class _QrScanScreenState extends State<QrScanScreen> {
   final MobileScannerController _controller = MobileScannerController(
     formats: const [BarcodeFormat.qrCode],
-    autoStart: false,
   );
   bool _handled = false;
   bool _starting = true;
+  bool _permissionGranted = false;
   String? _cameraError;
 
   @override
   void initState() {
     super.initState();
-    _startCamera();
+    _requestCamera();
   }
 
-  Future<void> _startCamera() async {
+  Future<void> _requestCamera() async {
     final status = await Permission.camera.request();
     if (!mounted) return;
     if (!status.isGranted) {
@@ -40,18 +40,12 @@ class _QrScanScreenState extends State<QrScanScreen> {
       });
       return;
     }
-
-    try {
-      await _controller.start();
-      if (!mounted) return;
-      setState(() => _starting = false);
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _starting = false;
-        _cameraError = 'The camera could not be started on this device.';
-      });
-    }
+    // Build the MobileScanner widget first. It starts the controller only once
+    // the camera view is attached, which avoids the common "start before mount"
+    // failure on Android.
+    setState(() {
+      _permissionGranted = true;
+    });
   }
 
   @override
@@ -116,7 +110,7 @@ class _QrScanScreenState extends State<QrScanScreen> {
                 ),
               ),
             )
-          else if (_starting)
+          else if (_starting || !_permissionGranted)
             const Center(child: CircularProgressIndicator())
           else
             MobileScanner(
