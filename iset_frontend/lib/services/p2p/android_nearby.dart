@@ -133,12 +133,24 @@ class AndroidNearby {
     }
   }
 
+  Future<bool> _startDiscovery(String myName) {
+    return _nearby.startDiscovery(
+      myName,
+      strategy,
+      serviceId: serviceId,
+      onEndpointFound: (id, name, service) => onEndpointFound(id, name),
+      onEndpointLost: (id) => onEndpointLost(id ?? ''),
+    );
+  }
+
   /// [advertisingName] carries the short pairing code used by QR recognition;
   /// [myName] is the friendly name shown on connection requests.
   Future<bool> start(String advertisingName, String myName) async {
     // Clear any stale session left behind by a previous run so Nearby doesn't
     // report STATUS_ALREADY_ADV (8001) when we start advertising again.
     await stop();
+    // Give the radios a moment to settle before starting fresh sessions.
+    await Future<void>.delayed(const Duration(milliseconds: 250));
 
     final advertised = await _nearby.startAdvertising(
       advertisingName,
@@ -156,13 +168,7 @@ class AndroidNearby {
     }
 
     try {
-      final discovered = await _nearby.startDiscovery(
-        myName,
-        strategy,
-        serviceId: serviceId,
-        onEndpointFound: (id, name, service) => onEndpointFound(id, name),
-        onEndpointLost: (id) => onEndpointLost(id ?? ''),
-      );
+      final discovered = await _startDiscovery(myName);
       if (!discovered) {
         await stop();
       }
@@ -173,6 +179,18 @@ class AndroidNearby {
       rethrow;
     }
   }
+
+  /// Discovery uses heavy radios. Stop it after connecting for a stable link.
+  Future<void> stopDiscovery() async {
+    try {
+      await _nearby.stopDiscovery();
+    } catch (_) {
+      // Ignore; stopping is best-effort.
+    }
+  }
+
+  /// Restart discovery after a disconnect so this device can be found again.
+  Future<bool> restartDiscovery(String myName) => _startDiscovery(myName);
 
   Future<void> stop() async {
     try {

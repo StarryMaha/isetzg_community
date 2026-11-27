@@ -92,8 +92,21 @@ class P2PProvider extends ChangeNotifier {
             _addUnique(_endpoints, Peer(id: id, name: _friendlyName(name))),
         onEndpointLost: (id) => _remove(_endpoints, id),
         onConnectionInitiated: (id, name) {
-          final friendly = _friendlyName(name);
-          _addUnique(_pending, Peer(id: id, name: friendly));
+          final friendly = _friendlyName(_displayNameFromConnection(name));
+          final code = _codeFromConnection(name);
+          final peer = Peer(id: id, name: friendly);
+
+          // QR flow is an explicit opt-in on both sides: the scanner sent the
+          // request and the QR owner is still showing the code. Auto-accept so
+          // users don't have to press Accept on two phones.
+          if (_qrSharing || (code != null && _qrHandshakeCodes.contains(code))) {
+            _status = 'Auto-accepting QR connection from $friendly…';
+            notifyListeners();
+            unawaited(accept(peer));
+            return;
+          }
+
+          _addUnique(_pending, peer);
           _status = '$friendly wants to connect';
           notifyListeners();
         },
@@ -112,6 +125,9 @@ class P2PProvider extends ChangeNotifier {
           if (connected) {
             _addUnique(_connected, peer);
             _status = 'Connected to ${peer.name}';
+            // Nearby discovery is radio-heavy; stop it for a stable link.
+            final service = _service;
+            if (service != null) unawaited(service.stopDiscovery());
           } else {
             _status = 'Connection failed. Try again.';
           }
@@ -120,6 +136,11 @@ class P2PProvider extends ChangeNotifier {
         onDisconnected: (id) {
           _remove(_connected, id);
           _status = 'Device disconnected';
+          final service = _service;
+          if (_running && _connected.isEmpty && service != null) {
+            unawaited(service.restartDiscovery(_myName));
+            _status = 'Device disconnected. Searching again…';
+          }
           notifyListeners();
         },
         onBytes: (endpointId, payloadId, bytes) {
@@ -213,6 +234,8 @@ class P2PProvider extends ChangeNotifier {
 
   final String _deviceCode;
   final Map<String, String> _qrNames = {};
+  final Set<String> _qrHandshakeCodes = {};
+  bool _qrSharing = false;
   String _myName = 'ISET student';
   bool _running = false;
   String _status = '';
@@ -253,6 +276,29 @@ class P2PProvider extends ChangeNotifier {
     final code = _codeFromAdvertised(advertised);
     if (code != null && _qrNames.containsKey(code)) return _qrNames[code]!;
     return advertised;
+  }
+
+  // QR connection requests carry "Name|ISET-CODE" so both sides can recognise
+  // the QR handshake and accept it without extra taps.
+  String _displayNameFromConnection(String raw) {
+    final parts = raw.split('|');
+    return parts.first.trim().isEmpty ? raw : parts.first.trim();
+  }
+
+  String? _codeFromConnection(String raw) {
+    final parts = raw.split('|');
+    if (parts.length < 2) return null;
+    return _codeFromAdvertised(parts.sublist(1).join('|'));
+  }
+
+  /// Called while the "My device QR" dialog is visible. Incoming requests
+  /// during this window are treated as QR-initiated and auto-accepted.
+  void beginQrSharing() {
+    _qrSharing = true;
+  }
+
+  void endQrSharing() {
+    _qrSharing = false;
   }
 
   void setDisplayName(String name) {
@@ -321,6 +367,7 @@ class P2PProvider extends ChangeNotifier {
     }
 
     if (payload.name != null) _qrNames[payload.code] = payload.name!;
+    _qrHandshakeCodes.add(payload.code);
 
     if (!_running) {
       await start(_myName);
@@ -364,8 +411,10 @@ class P2PProvider extends ChangeNotifier {
     final service = _service;
     if (service == null) return;
     try {
-      await service.requestConnection(_myName, peer.id);
-      _status = 'Connection request sent to ${peer.name}';
+      // Include our own pairing code so the receiver can recognise the QR
+      // handshake and auto-accept when appropriate.
+      await service.requestConnection('$_myName|$pairingCode', peer.id);
+      _status = 'Connecting to ${peer.name}…';
     } catch (error) {
       _status = 'Connection request failed: ${_friendlyError(error)}';
     }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../theme.dart';
 
@@ -15,8 +16,43 @@ class QrScanScreen extends StatefulWidget {
 class _QrScanScreenState extends State<QrScanScreen> {
   final MobileScannerController _controller = MobileScannerController(
     formats: const [BarcodeFormat.qrCode],
+    autoStart: false,
   );
   bool _handled = false;
+  bool _starting = true;
+  String? _cameraError;
+
+  @override
+  void initState() {
+    super.initState();
+    _startCamera();
+  }
+
+  Future<void> _startCamera() async {
+    final status = await Permission.camera.request();
+    if (!mounted) return;
+    if (!status.isGranted) {
+      setState(() {
+        _starting = false;
+        _cameraError = status.isPermanentlyDenied
+            ? 'Camera access is blocked. Open Android settings and allow Camera for ISET Community Hub.'
+            : 'Camera access is needed to scan a device QR.';
+      });
+      return;
+    }
+
+    try {
+      await _controller.start();
+      if (!mounted) return;
+      setState(() => _starting = false);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _starting = false;
+        _cameraError = 'The camera could not be started on this device.';
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -36,6 +72,17 @@ class _QrScanScreenState extends State<QrScanScreen> {
     }
   }
 
+  String _scannerMessage(MobileScannerException error) {
+    switch (error.errorCode) {
+      case MobileScannerErrorCode.permissionDenied:
+        return 'Camera access is needed to scan a device QR.';
+      case MobileScannerErrorCode.unsupported:
+        return 'This device has no usable camera for QR scanning.';
+      default:
+        return error.errorCode.message;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -43,7 +90,49 @@ class _QrScanScreenState extends State<QrScanScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          MobileScanner(controller: _controller, onDetect: _onDetect),
+          if (_cameraError != null)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.qr_code_scanner, size: 48,
+                        color: AppColors.muted),
+                    const SizedBox(height: 16),
+                    Text(
+                      _cameraError!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    if (_cameraError!.contains('Android settings')) ...[
+                      const SizedBox(height: 16),
+                      FilledButton(
+                        onPressed: openAppSettings,
+                        child: const Text('Open settings'),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            )
+          else if (_starting)
+            const Center(child: CircularProgressIndicator())
+          else
+            MobileScanner(
+              controller: _controller,
+              onDetect: _onDetect,
+              errorBuilder: (_, error) => Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(28),
+                  child: Text(
+                    _scannerMessage(error),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ),
+              ),
+            ),
           Positioned(
             left: 20,
             right: 20,

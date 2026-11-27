@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -240,54 +242,74 @@ class _FilesScreenState extends State<FilesScreen> {
 
   Future<void> _showMyQr(String myName) async {
     final p2p = context.read<P2PProvider>();
-    if (!p2p.running) await p2p.start(myName);
+    p2p.setDisplayName(myName);
+    p2p.beginQrSharing();
+
+    // Show the QR immediately. Nearby permissions/radios can take time or show
+    // a system prompt; blocking on them made the dialog look like it never
+    // opened.
+    if (!p2p.running) unawaited(p2p.start(myName));
     if (!mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: const Text('My device QR'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              color: Colors.white,
-              child: QrImageView(
-                data: p2p.qrPayload,
-                version: QrVersions.auto,
-                size: 200,
-                backgroundColor: Colors.white,
-                foregroundColor: Colors.black,
-                errorStateBuilder: (_, __) => const SizedBox(
-                  height: 200,
-                  child: Center(child: Text('QR unavailable',
-                      style: TextStyle(color: Colors.black))),
-                ),
+
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: AppColors.surface,
+          title: const Text('My device QR'),
+          content: Consumer<P2PProvider>(
+            builder: (_, nearby, __) => SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    color: Colors.white,
+                    child: QrImageView(
+                      data: nearby.qrPayload,
+                      version: QrVersions.auto,
+                      size: 210,
+                      backgroundColor: Colors.white,
+                      foregroundColor: Colors.black,
+                      errorStateBuilder: (_, __) => const SizedBox(
+                        height: 210,
+                        child: Center(
+                          child: Text('QR unavailable',
+                              style: TextStyle(color: Colors.black)),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(nearby.pairingCode,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w800, letterSpacing: 1.5)),
+                  const SizedBox(height: 8),
+                  Text(
+                    nearby.running
+                        ? 'Keep this screen open. Incoming QR connections are accepted automatically.'
+                        : nearby.status.isEmpty
+                            ? 'Starting Nearby…'
+                            : nearby.status,
+                    textAlign: TextAlign.center,
+                    style:
+                        const TextStyle(color: AppColors.muted, fontSize: 12),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 12),
-            Text(p2p.pairingCode,
-                style: const TextStyle(
-                    fontWeight: FontWeight.w800, letterSpacing: 1.5)),
-            const SizedBox(height: 8),
-            Text(
-              p2p.running
-                  ? 'Keep this screen open while the other device scans.'
-                  : p2p.status,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Done'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Done'),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      p2p.endQrSharing();
+    }
   }
 
   Future<void> _scanQr() async {
